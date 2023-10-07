@@ -3,13 +3,16 @@ package main
 import (
 	"flag"
 	"fmt"
+	"lecture03_homework/utils"
+	"log"
 	"os"
 )
 
 type Options struct {
-	From string
-	To   string
-	// todo: add required flags
+	From   string
+	To     string
+	Offset int
+	Limit  int
 }
 
 func ParseFlags() (*Options, error) {
@@ -17,8 +20,8 @@ func ParseFlags() (*Options, error) {
 
 	flag.StringVar(&opts.From, "from", "", "file to read. by default - stdin")
 	flag.StringVar(&opts.To, "to", "", "file to write. by default - stdout")
-
-	// todo: parse and validate all flags
+	flag.IntVar(&opts.Offset, "offset", 0, "offset of the input. by default - 0")
+	flag.IntVar(&opts.Limit, "limit", -1, "limit of the input size. by default - -1")
 
 	flag.Parse()
 
@@ -32,7 +35,38 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println(opts)
+	logger := log.New(os.Stderr, "", 3)
+	var rw = utils.MyReadWriter{}
 
-	// todo: implement the functional requirements described in read.me
+	var input []byte
+
+	if opts.From == "" {
+
+		input, err = rw.ReadFromStdin(opts.Offset, opts.Limit)
+		if err != nil {
+			// todo: handle
+			logger.Println("Error occurred during reading from stdin:", err)
+		}
+
+	} else {
+
+		input, err = rw.ReadFromFile(opts.From, opts.Offset, opts.Limit)
+		if err != nil {
+			// todo: handle
+			logger.Println("Error occurred during reading from file:", err)
+
+		}
+
+	}
+
+	if opts.To == "" {
+		rw.WriteToStdout(input)
+	} else {
+
+		err = rw.WriteToFile(opts.To, input)
+		if err != nil {
+			// todo: handle
+			logger.Println("Error occurred during writing to file:", err)
+		}
+	}
 }
