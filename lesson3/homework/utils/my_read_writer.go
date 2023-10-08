@@ -6,10 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 )
-
-// todo: use structs with Reader, Writer interfaces
 
 type StdinReader interface {
 	ReadFromStdin(offset int, limit int) ([]byte, error)
@@ -57,36 +56,47 @@ func (r *MyReadWriter) ReadFromStdin(offset int, limit int) ([]byte, error) {
 	//reader := bufio.NewReader(os.Stdin)
 	//_, err := reader.Read(input)
 
-	// todo: read only to Limit!
-	// todo: infinite loop on tests
-	var input []byte
-	in := bufio.NewReader(os.Stdin)
-	for {
-		c, err := in.ReadByte()
-		if err == io.EOF {
-			break
-		}
-		input = append(input, c)
-	}
-
-	//if err != nil {
-	//	return nil, err
-	//}
-
-	err := checkOffset(offset, len(input))
-	if err != nil {
-		return nil, err
-	}
-
-	if limit == -1 || limit > len(input) {
-		limit = len(input) - offset
-	}
-
 	if limit < -1 {
 		return nil, errors.New("limit is a negative value")
 	}
 
-	return input[offset : offset+limit], nil
+	// todo: bad?
+	if limit == -1 {
+		limit = math.MaxInt64
+	}
+
+	// var readSize int
+	var input []byte
+	in := bufio.NewReader(os.Stdin)
+	for {
+
+		if limit == 0 {
+			break
+		}
+
+		c, err := in.ReadByte()
+		if err == io.EOF {
+
+			if offset > 0 {
+				return nil, errors.New("offset is greater than input length")
+			}
+			break
+		}
+
+		if offset <= 0 {
+			input = append(input, c)
+			limit--
+		}
+
+		offset--
+	}
+
+	//err := checkOffset(offset, readSize)
+	//if err != nil {
+	//	return nil, err
+	//}
+
+	return input, nil
 }
 
 func (r *MyReadWriter) ReadFromFile(filename string, offset int, limit int) ([]byte, error) {
