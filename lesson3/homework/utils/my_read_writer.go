@@ -74,6 +74,7 @@ func (r *MyReadWriter) ReadFromStdin(offset int, limit int) ([]byte, error) {
 			break
 		}
 
+		// todo: block size?
 		c, err := in.ReadByte()
 		if err == io.EOF {
 
@@ -91,16 +92,12 @@ func (r *MyReadWriter) ReadFromStdin(offset int, limit int) ([]byte, error) {
 		offset--
 	}
 
-	//err := checkOffset(offset, readSize)
-	//if err != nil {
-	//	return nil, err
-	//}
-
 	return input, nil
 }
 
 func (r *MyReadWriter) ReadFromFile(filename string, offset int, limit int) ([]byte, error) {
 
+	// todo: read byte by byte (or by block size)
 	input, err := os.ReadFile(filename)
 
 	if err != nil {

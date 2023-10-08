@@ -1,19 +1,26 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"lecture03_homework/utils"
 	"log"
 	"os"
+	"slices"
+	"strings"
 )
 
 type Options struct {
-	From   string
-	To     string
-	Offset int
-	Limit  int
+	From      string
+	To        string
+	Offset    int
+	Limit     int
+	Conv      string
+	Uppercase bool
+	Lowercase bool
+	Trim      bool
 }
 
 func ParseFlags() (*Options, error) {
@@ -21,6 +28,8 @@ func ParseFlags() (*Options, error) {
 
 	flag.StringVar(&opts.From, "from", "", "file to read. by default - stdin")
 	flag.StringVar(&opts.To, "to", "", "file to write. by default - stdout")
+	flag.StringVar(&opts.Conv, "conv", "", "conversion rule. by default - none")
+
 	flag.IntVar(&opts.Offset, "offset", 0, "offset of the input. by default - 0")
 	flag.IntVar(&opts.Limit, "limit", -1, "limit of the input size. by default - -1")
 
@@ -55,6 +64,39 @@ func validateFlags(opts *Options) error {
 		return errors.New("offset can not be negative value")
 	}
 
+	// convs
+
+	convs := strings.Split(opts.Conv, ",")
+	for _, conv := range convs {
+
+		conv = strings.TrimSpace(conv)
+
+	}
+
+	upInd := slices.IndexFunc(convs, func(s string) bool { return strings.ToLower(strings.TrimSpace(s)) == "upper_case" })
+	lowInd := slices.IndexFunc(convs, func(s string) bool { return strings.ToLower(strings.TrimSpace(s)) == "lower_case" })
+	trimInd := slices.IndexFunc(convs, func(s string) bool { return strings.ToLower(strings.TrimSpace(s)) == "trim_spaces" })
+
+	if upInd != -1 && lowInd != -1 {
+		return errors.New("uppercase and lowercase can not live together")
+	}
+
+	if upInd != -1 {
+		opts.Uppercase = true
+	}
+
+	if lowInd != -1 {
+		opts.Lowercase = true
+	}
+
+	if trimInd != -1 {
+		opts.Trim = true
+	}
+
+	if upInd == -1 && lowInd == -1 && trimInd == -1 && len(convs) != 0 {
+		return errors.New("wrong conv flag provided")
+	}
+
 	return nil
 }
 
@@ -62,7 +104,9 @@ func main() {
 	opts, err := ParseFlags()
 
 	logger := log.New(os.Stderr, "", 3)
+
 	var rw = utils.MyReadWriter{}
+	var tc = utils.MyTextConverter{}
 
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "can not parse flags:", err)
@@ -95,6 +139,21 @@ func main() {
 
 	}
 
+	if opts.Uppercase {
+		str := bytes.NewBuffer(input).String()
+		input = []byte(tc.Uppercase(str))
+	}
+
+	if opts.Lowercase {
+		str := bytes.NewBuffer(input).String()
+		input = []byte(tc.Lowercase(str))
+	}
+
+	if opts.Trim {
+		str := bytes.NewBuffer(input).String()
+		input = []byte(tc.TrimSpaces(str))
+	}
+
 	if opts.To == "" {
 		rw.WriteToStdout(input)
 	} else {
@@ -105,4 +164,5 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
 }
