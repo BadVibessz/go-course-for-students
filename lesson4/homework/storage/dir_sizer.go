@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"golang.org/x/sync/errgroup"
 	"sync"
 )
 
@@ -36,6 +37,8 @@ func getAllFiles(ctx context.Context, d Dir, m *sync.Mutex) ([]File, error) {
 
 	var totalFiles []File
 
+	errGroup, ctx := errgroup.WithContext(ctx)
+
 	dirs, files, err := d.Ls(ctx)
 
 	if err != nil {
@@ -43,30 +46,29 @@ func getAllFiles(ctx context.Context, d Dir, m *sync.Mutex) ([]File, error) {
 	}
 
 	totalFiles = append(totalFiles, files...)
-
-	wg := sync.WaitGroup{}
-
-	wg.Add(len(dirs))
 	for _, dir := range dirs {
+		errGroup.Go(
+			func() error {
 
-		go func(d Dir) {
-			defer wg.Done()
+				subFiles, err := getAllFiles(ctx, dir, m)
 
-			subFiles, err := getAllFiles(ctx, d, m)
+				if err != nil {
+					return err
+				}
 
-			if err != nil {
-				//return totalFiles, err
-				// todo:
-			}
+				m.Lock()
+				totalFiles = append(totalFiles, subFiles...)
+				m.Unlock()
 
-			m.Lock()
-			totalFiles = append(totalFiles, subFiles...)
-			m.Unlock()
-		}(dir)
+				return nil
+			})
 
 	}
 
-	wg.Wait()
+	if err := errGroup.Wait(); err != nil {
+		return totalFiles, err
+	}
+
 	return totalFiles, nil
 }
 
@@ -75,43 +77,13 @@ func (a *sizer) Size(ctx context.Context, d Dir) (Result, error) {
 	var totalSize int64
 	var totalCount int64
 
-	dirs, files, err := d.Ls(ctx)
+	m := sync.Mutex{}
 
+	totalFiles, err := getAllFiles(ctx, d, &m)
 	if err != nil {
 		return Result{}, err
 	}
 
-	var totalFiles []File
-	totalFiles = append(totalFiles, files...)
-
-	m := sync.Mutex{}
-
-	wg := sync.WaitGroup{}
-
-	wg.Add(len(dirs))
-	for _, dir := range dirs {
-		go func(d Dir) {
-			defer wg.Done()
-
-			allFiles, err := getAllFiles(ctx, d, &m)
-
-			if err != nil {
-				// todo:
-			}
-
-			m.Lock()
-			totalFiles = append(totalFiles, allFiles...)
-			m.Unlock()
-
-		}(dir)
-
-		if err != nil {
-			return Result{}, err
-		}
-
-	}
-
-	wg.Wait()
 	for _, f := range totalFiles {
 		size, err := f.Stat(ctx)
 
