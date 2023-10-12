@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"golang.org/x/sync/errgroup"
 	"sync"
 )
 
@@ -33,39 +32,50 @@ func NewSizer() DirSizer {
 	return &sizer{}
 }
 
-func getAllFiles(ctx context.Context, d Dir, m *sync.Mutex) ([]File, error) {
+func getAllFiles(ctx context.Context, d Dir, m *sync.Mutex, errChan chan error) ([]File, error) {
 
 	var totalFiles []File
+	var err error
 
-	errGroup, ctx := errgroup.WithContext(ctx)
+	wg := sync.WaitGroup{}
 
 	dirs, files, err := d.Ls(ctx)
-
 	if err != nil {
 		return totalFiles, err
 	}
 
 	totalFiles = append(totalFiles, files...)
 	for _, dir := range dirs {
-		errGroup.Go(
-			func() error {
+		wg.Add(1)
+		go func(d Dir) {
+			defer wg.Done()
 
-				subFiles, err := getAllFiles(ctx, dir, m)
+			select {
+			case <-errChan:
+				// error occurred
+				return
 
+			default:
+				subFiles, err := getAllFiles(ctx, d, m, errChan)
 				if err != nil {
-					return err
+					errChan <- err
+					close(errChan)
+					return
+				} else {
+					m.Lock()
+					totalFiles = append(totalFiles, subFiles...)
+					m.Unlock()
+					return
 				}
+			}
 
-				m.Lock()
-				totalFiles = append(totalFiles, subFiles...)
-				m.Unlock()
-
-				return nil
-			})
+		}(dir)
 
 	}
+	wg.Wait()
 
-	if err := errGroup.Wait(); err != nil {
+	err, ok := <-errChan
+	if !ok && err != nil {
 		return totalFiles, err
 	}
 
@@ -76,10 +86,11 @@ func (a *sizer) Size(ctx context.Context, d Dir) (Result, error) {
 
 	var totalSize int64
 	var totalCount int64
+	errChan := make(chan error, 1)
 
 	m := sync.Mutex{}
 
-	totalFiles, err := getAllFiles(ctx, d, &m)
+	totalFiles, err := getAllFiles(ctx, d, &m, errChan)
 	if err != nil {
 		return Result{}, err
 	}
