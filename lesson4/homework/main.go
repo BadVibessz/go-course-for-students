@@ -40,4 +40,36 @@ func main() {
 
 	result, err := sizer.Size(ctx, storage.NewLocalDir(td))
 	fmt.Println(result)
+
+	//c := make(chan any)
+	//wg := sync.WaitGroup{}
+	//m := sync.Mutex{}
+	//
+	//for i := 0; i < 3; i++ {
+	//	wg.Add(1)
+	//	go func(ch chan any, mut *sync.Mutex) {
+	//		defer wg.Done()
+	//
+	//		select {
+	//		case <-ch:
+	//			mut.Lock()
+	//			fmt.Println("ERROR OCCURRED")
+	//			mut.Unlock()
+	//		}
+	//
+	//	}(c, &m)
+	//
+	//}
+	//c <- "DURA"
+	//
+	////wg.Add(1)
+	////go func() {
+	////	defer wg.Done()
+	////
+	////	c <- "DURA"
+	////	return
+	////}()
+	//
+	//wg.Wait()
+
 }

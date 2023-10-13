@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // Result represents the Size function result
@@ -23,145 +25,95 @@ type DirSizer interface {
 type sizer struct {
 	// maxWorkersCount number of workers for asynchronous run
 	maxWorkersCount int
-
-	// TODO: add other fields as you wish
+	countMadeDir    int64
+	countDir        int64
+	err             error
+	dirCh           chan Dir
+	endCh           chan struct{}
 }
 
 // NewSizer returns new DirSizer instance
 func NewSizer() DirSizer {
-	return &sizer{}
-}
-
-func getAllFiles(ctx context.Context, d Dir, m *sync.Mutex, errChan chan error) ([]File, error) {
-
-	var totalFiles []File
-	var err error
-
-	wg := sync.WaitGroup{}
-
-	dirs, files, err := d.Ls(ctx)
-	if err != nil {
-		return totalFiles, err
+	return &sizer{
+		maxWorkersCount: 10,
+		countMadeDir:    0,
+		countDir:        0,
+		dirCh:           make(chan Dir),
+		endCh:           make(chan struct{}, 10),
 	}
-
-	totalFiles = append(totalFiles, files...)
-	for _, dir := range dirs {
-		wg.Add(1)
-		go func(d Dir) {
-			defer wg.Done()
-
-			select {
-			case <-errChan:
-				// error occurred
-				return
-
-			default:
-				subFiles, err := getAllFiles(ctx, d, m, errChan)
-				if err != nil {
-					errChan <- err
-					close(errChan)
-					return
-				} else {
-					m.Lock()
-					totalFiles = append(totalFiles, subFiles...)
-					m.Unlock()
-					return
-				}
-			}
-
-		}(dir)
-
-	}
-	wg.Wait()
-
-	err, ok := <-errChan
-	if !ok && err != nil {
-		return totalFiles, err
-	}
-
-	return totalFiles, nil
-}
-
-func worker(ctx context.Context, m *sync.Mutex, wg *sync.WaitGroup, dirCh chan Dir, allFiles []File) {
-	defer wg.Done()
-
-	// todo: use errorGroup
-	select {
-	case dir, ok := <-dirCh:
-
-		if !ok {
-			// todo handle
-			return
-		}
-
-		dirs, files, err := dir.Ls(ctx)
-
-		if err != nil {
-			//errCh <- err
-			return
-		}
-
-		// add new dirs into dir channel
-		for _, dir := range dirs {
-			dirCh <- dir
-		}
-
-		// add new files into resulting slice
-		m.Lock()
-		allFiles = append(allFiles, files...)
-		m.Unlock()
-
-	//case <-errCh:
-	// todo error occurred
-
-	default:
-		return
-	}
-
 }
 
 func (a *sizer) Size(ctx context.Context, d Dir) (Result, error) {
+	res := Result{Size: 0, Count: 0}
+	wg := &sync.WaitGroup{}
+	mutex := &sync.Mutex{}
 
-	var totalSize int64
-	var totalCount int64
-
-	var files []File
-
-	//errChan := make(chan error, 1)
-
-	m := sync.Mutex{}
-	wg := sync.WaitGroup{}
-
-	dirChan := make(chan Dir)
-	dirChan <- d
-
-	for i := 0; i < a.maxWorkersCount; i++ {
+	for i := 1; i <= a.maxWorkersCount; i++ {
 		wg.Add(1)
-		go worker(ctx, &m, &wg, dirChan, files)
+		go a.dirProcessor(ctx, wg, mutex, &res)
 	}
 
-	// listen for context cancellation
+	a.dirCh <- d
+	atomic.AddInt64(&a.countDir, 1)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-
 		select {
 		case <-ctx.Done():
-			close(dirChan)
+			a.close()
+			return
+		case <-a.endCh:
+			a.close()
 			return
 		}
 	}()
 	wg.Wait()
 
-	for _, f := range files {
-		size, err := f.Stat(ctx)
-
-		if err != nil {
-			return Result{}, err
-		}
-		totalSize += size
-		totalCount++
+	if a.err != nil {
+		return Result{}, a.err
 	}
+	return res, nil
+}
 
-	return Result{totalSize, totalCount}, nil
+func (a *sizer) close() {
+	close(a.dirCh)
+	close(a.endCh)
+}
+
+func (a *sizer) dirProcessor(ctx context.Context, wg *sync.WaitGroup, mutex *sync.Mutex, res *Result) {
+	defer wg.Done()
+
+	for dir := range a.dirCh {
+		dirSlice, fileSlice, err := dir.Ls(ctx)
+		if err != nil {
+			mutex.Lock()
+			a.err = fmt.Errorf("dirProcessor : %w", err)
+			mutex.Unlock()
+			a.endCh <- struct{}{}
+			return
+		}
+		atomic.AddInt64(&a.countDir, int64(len(dirSlice)))
+		for _, dir := range dirSlice {
+			a.dirCh <- dir
+		}
+		for _, file := range fileSlice {
+			size, err := file.Stat(ctx)
+			if err != nil {
+				mutex.Lock()
+				a.err = fmt.Errorf("fileProcessor : %w", err)
+				mutex.Unlock()
+				a.endCh <- struct{}{}
+				return
+			}
+
+			atomic.AddInt64(&res.Count, 1)
+			atomic.AddInt64(&res.Size, size)
+		}
+		atomic.AddInt64(&a.countMadeDir, 1)
+
+		if atomic.LoadInt64(&a.countMadeDir) == atomic.LoadInt64(&a.countDir) {
+			a.endCh <- struct{}{}
+			return
+		}
+	}
 }
