@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 )
 
 // Result represents the Size function result
@@ -23,104 +24,122 @@ type DirSizer interface {
 type sizer struct {
 	// maxWorkersCount number of workers for asynchronous run
 	maxWorkersCount int
-
-	// TODO: add other fields as you wish
 }
 
 // NewSizer returns new DirSizer instance
 func NewSizer() DirSizer {
-	return &sizer{}
+	return &sizer{
+		maxWorkersCount: 10,
+	}
 }
 
-func getAllFiles(ctx context.Context, d Dir, m *sync.Mutex) ([]File, error) {
+func (a *sizer) close(dirCh chan Dir, endCh chan any, errCh chan error) {
+	close(dirCh)
+	close(endCh)
+	close(errCh)
+}
 
-	var totalFiles []File
-
-	dirs, files, err := d.Ls(ctx)
-
-	if err != nil {
-		return totalFiles, err
+func closeChannels(chans ...chan any) {
+	for _, ch := range chans {
+		close(ch)
 	}
+}
 
-	totalFiles = append(totalFiles, files...)
+func worker(ctx context.Context, wg *sync.WaitGroup, mutex *sync.Mutex, allFiles []File,
+	dirCh chan Dir, endCh chan any, errCh chan error, sz *int64, ct *int64, dirsProcessed *int64, dirsMade *int64) {
+	defer wg.Done()
 
-	wg := sync.WaitGroup{}
+	for dir := range dirCh {
+		dirs, files, err := dir.Ls(ctx)
+		if err != nil {
+			errCh <- err
+			endCh <- struct{}{}
+			return
+		}
 
-	wg.Add(len(dirs))
-	for _, dir := range dirs {
+		atomic.AddInt64(dirsProcessed, int64(len(dirs)))
+		for _, dir := range dirs {
+			dirCh <- dir
+		}
 
-		go func(d Dir) {
-			defer wg.Done()
-
-			subFiles, err := getAllFiles(ctx, d, m)
-
+		for _, f := range files {
+			size, err := f.Stat(ctx)
 			if err != nil {
-				//return totalFiles, err
-				// todo:
+				endCh <- err
+				errCh <- err
+
+				return
 			}
 
-			m.Lock()
-			totalFiles = append(totalFiles, subFiles...)
-			m.Unlock()
-		}(dir)
+			atomic.AddInt64(sz, size)
+			atomic.AddInt64(ct, 1)
+		}
 
+		//TODO: I FUCKING DO NOT UNDERSTAND WHY ALLFILES STAYS NIL
+		//mutex.Lock()
+		//allFiles = append(allFiles, files...)
+		//mutex.Unlock()
+
+		atomic.AddInt64(dirsMade, 1)
+
+		if atomic.LoadInt64(dirsMade) == atomic.LoadInt64(dirsProcessed) {
+			endCh <- struct{}{}
+			return
+		}
 	}
-
-	wg.Wait()
-	return totalFiles, nil
 }
 
 func (a *sizer) Size(ctx context.Context, d Dir) (Result, error) {
 
-	var totalSize int64
-	var totalCount int64
+	wg := &sync.WaitGroup{}
+	mutex := &sync.Mutex{}
 
-	dirs, files, err := d.Ls(ctx)
+	dirCh := make(chan Dir, 1)
+	dirCh <- d // todo: if this channel is unbuffered this line causes deadlock; understand why!
 
-	if err != nil {
+	endCh := make(chan any, 1) // todo: understand difference between buffered and unbuffered channels properly
+	errCh := make(chan error, 1)
+
+	var dirsProcessed int64 = 1
+	var dirsMade int64 // todo: why this int starting with 0
+
+	var size int64
+	var count int64
+
+	var files []File
+	for i := 1; i <= a.maxWorkersCount; i++ {
+		wg.Add(1)
+		go worker(ctx, wg, mutex, files, dirCh, endCh, errCh, &size, &count, &dirsProcessed, &dirsMade)
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-ctx.Done():
+			a.close(dirCh, endCh, errCh)
+			//closeChannels(dirCh, endCh, errCh) // todo:
+			return
+		case <-endCh:
+			a.close(dirCh, endCh, errCh)
+			return
+		}
+	}()
+	wg.Wait()
+
+	for _, f := range files {
+
+		sz, err := f.Stat(ctx)
+		if err != nil {
+			return Result{1, 1}, err
+		}
+
+		size += sz
+		count++
+	}
+
+	if err := <-errCh; err != nil {
 		return Result{}, err
 	}
-
-	var totalFiles []File
-	totalFiles = append(totalFiles, files...)
-
-	m := sync.Mutex{}
-
-	wg := sync.WaitGroup{}
-
-	wg.Add(len(dirs))
-	for _, dir := range dirs {
-		go func(d Dir) {
-			defer wg.Done()
-
-			allFiles, err := getAllFiles(ctx, d, &m)
-
-			if err != nil {
-				// todo:
-			}
-
-			m.Lock()
-			totalFiles = append(totalFiles, allFiles...)
-			m.Unlock()
-
-		}(dir)
-
-		if err != nil {
-			return Result{}, err
-		}
-
-	}
-
-	wg.Wait()
-	for _, f := range totalFiles {
-		size, err := f.Stat(ctx)
-
-		if err != nil {
-			return Result{}, err
-		}
-		totalSize += size
-		totalCount++
-	}
-
-	return Result{totalSize, totalCount}, nil
+	return Result{size, count}, nil
 }
