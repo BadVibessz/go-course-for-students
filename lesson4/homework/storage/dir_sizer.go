@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 )
@@ -27,9 +26,6 @@ type sizer struct {
 	maxWorkersCount int
 	countMadeDir    int64
 	countDir        int64
-	err             error
-	dirCh           chan Dir
-	endCh           chan struct{}
 }
 
 // NewSizer returns new DirSizer instance
@@ -38,81 +34,108 @@ func NewSizer() DirSizer {
 		maxWorkersCount: 10,
 		countMadeDir:    0,
 		countDir:        0,
-		dirCh:           make(chan Dir),
-		endCh:           make(chan struct{}, 10),
 	}
 }
 
 func (a *sizer) Size(ctx context.Context, d Dir) (Result, error) {
-	res := Result{Size: 0, Count: 0}
+
 	wg := &sync.WaitGroup{}
 	mutex := &sync.Mutex{}
 
+	dirCh := make(chan Dir)
+	endCh := make(chan any, 10)
+	errCh := make(chan error, 1)
+
+	var size int64
+	var count int64
+
+	var files []File
 	for i := 1; i <= a.maxWorkersCount; i++ {
 		wg.Add(1)
-		go a.dirProcessor(ctx, wg, mutex, &res)
+		go a.worker(ctx, wg, mutex, files, dirCh, endCh, errCh, &size, &count)
 	}
 
-	a.dirCh <- d
+	dirCh <- d
 	atomic.AddInt64(&a.countDir, 1)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		select {
 		case <-ctx.Done():
-			a.close()
+			a.close(dirCh, endCh, errCh)
 			return
-		case <-a.endCh:
-			a.close()
+		case <-endCh:
+			a.close(dirCh, endCh, errCh)
 			return
 		}
 	}()
 	wg.Wait()
 
-	if a.err != nil {
-		return Result{}, a.err
+	for _, f := range files {
+
+		sz, err := f.Stat(ctx)
+		if err != nil {
+			return Result{1, 1}, err
+		}
+
+		size += sz
+		count++
 	}
-	return res, nil
+
+	if err := <-errCh; err != nil {
+		return Result{}, err
+	}
+	return Result{size, count}, nil
 }
 
-func (a *sizer) close() {
-	close(a.dirCh)
-	close(a.endCh)
+func (a *sizer) close(dirCh chan Dir, endCh chan any, errCh chan error) {
+	close(dirCh)
+	close(endCh)
+	close(errCh)
 }
 
-func (a *sizer) dirProcessor(ctx context.Context, wg *sync.WaitGroup, mutex *sync.Mutex, res *Result) {
+func (a *sizer) worker(ctx context.Context, wg *sync.WaitGroup, mutex *sync.Mutex, allFiles []File,
+	dirCh chan Dir, endCh chan any, errCh chan error, sz *int64, ct *int64) {
 	defer wg.Done()
 
-	for dir := range a.dirCh {
+	for dir := range dirCh {
 		dirSlice, fileSlice, err := dir.Ls(ctx)
 		if err != nil {
-			mutex.Lock()
-			a.err = fmt.Errorf("dirProcessor : %w", err)
-			mutex.Unlock()
-			a.endCh <- struct{}{}
+			errCh <- err
+			endCh <- struct{}{}
 			return
 		}
+
 		atomic.AddInt64(&a.countDir, int64(len(dirSlice)))
+
 		for _, dir := range dirSlice {
-			a.dirCh <- dir
+			dirCh <- dir
 		}
-		for _, file := range fileSlice {
-			size, err := file.Stat(ctx)
+
+		for _, f := range fileSlice {
+			size, err := f.Stat(ctx)
 			if err != nil {
-				mutex.Lock()
-				a.err = fmt.Errorf("fileProcessor : %w", err)
-				mutex.Unlock()
-				a.endCh <- struct{}{}
+				endCh <- err
+				errCh <- err
+
 				return
 			}
 
-			atomic.AddInt64(&res.Count, 1)
-			atomic.AddInt64(&res.Size, size)
+			atomic.AddInt64(sz, size)
+			atomic.AddInt64(ct, 1)
 		}
+
+		//TODO: I FUCKING DO NOT UNDERSTAND WHY ALLFILES STAYS NIL
+		//mutex.Lock()
+		//allFiles = append(allFiles, fileSlice...)
+		//mutex.Unlock()
+
+		//atomic.AddInt64(sz, int64(len(fileSlice)))
+
 		atomic.AddInt64(&a.countMadeDir, 1)
 
 		if atomic.LoadInt64(&a.countMadeDir) == atomic.LoadInt64(&a.countDir) {
-			a.endCh <- struct{}{}
+			endCh <- struct{}{}
 			return
 		}
 	}
