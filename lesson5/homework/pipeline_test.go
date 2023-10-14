@@ -80,7 +80,7 @@ func TestPipeline(t *testing.T) {
 		elapsed := time.Since(start)
 
 		require.Equal(t, []string{"102"}, result)
-		require.Less(t, int64(elapsed), // ~0.4s for processing 1 valuee in 4 stages (100ms every) concurrently
+		require.Less(t, int64(elapsed), // ~0.4s for processing 1 value in 4 stages (100ms every) concurrently
 			int64(sleepPerStage)*int64(len(stages)+len(data)-1)+int64(fault))
 	})
 
