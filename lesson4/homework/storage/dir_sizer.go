@@ -33,16 +33,10 @@ func NewSizer() DirSizer {
 	}
 }
 
-func (a *sizer) close(dirCh chan Dir, endCh chan any, errCh chan error) {
+func closeChannels(dirCh chan Dir, endCh chan any, errCh chan error) {
 	close(dirCh)
 	close(endCh)
 	close(errCh)
-}
-
-func closeChannels(chans ...chan any) {
-	for _, ch := range chans {
-		close(ch)
-	}
 }
 
 func worker(ctx context.Context, wg *sync.WaitGroup, mutex *sync.Mutex, allFiles []File,
@@ -75,15 +69,20 @@ func worker(ctx context.Context, wg *sync.WaitGroup, mutex *sync.Mutex, allFiles
 			atomic.AddInt64(ct, 1)
 		}
 
-		//TODO: I FUCKING DO NOT UNDERSTAND WHY ALLFILES STAYS NIL
+		// todo: ask on stackoverflow
+		//TODO: why allFiles stays nil?
 		//mutex.Lock()
 		//allFiles = append(allFiles, files...)
+		//fmt.Printf("init slice addr: %p\n", &allFiles)
+		//fmt.Printf("appended: %v\n", files)
+		//fmt.Printf("total slice: %v\n", allFiles)
+		//fmt.Printf("total slice addr %p:\n\n ", &allFiles)
 		//mutex.Unlock()
 
 		atomic.AddInt64(dirsMade, 1)
 
 		if atomic.LoadInt64(dirsMade) == atomic.LoadInt64(dirsProcessed) {
-			endCh <- struct{}{}
+			endCh <- "work done"
 			return
 		}
 	}
@@ -91,8 +90,8 @@ func worker(ctx context.Context, wg *sync.WaitGroup, mutex *sync.Mutex, allFiles
 
 func (a *sizer) Size(ctx context.Context, d Dir) (Result, error) {
 
-	wg := &sync.WaitGroup{}
-	mutex := &sync.Mutex{}
+	wg := sync.WaitGroup{}
+	mutex := sync.Mutex{}
 
 	dirCh := make(chan Dir, 1)
 	dirCh <- d // todo: if this channel is unbuffered this line causes deadlock; understand why!
@@ -101,15 +100,17 @@ func (a *sizer) Size(ctx context.Context, d Dir) (Result, error) {
 	errCh := make(chan error, 1)
 
 	var dirsProcessed int64 = 1
-	var dirsMade int64 // todo: why this int starting with 0
+	var dirsMade int64 // todo: why this counter starts with 0
 
 	var size int64
 	var count int64
 
 	var files []File
+
+	// a.maxWorkersCount = 1
 	for i := 1; i <= a.maxWorkersCount; i++ {
 		wg.Add(1)
-		go worker(ctx, wg, mutex, files, dirCh, endCh, errCh, &size, &count, &dirsProcessed, &dirsMade)
+		go worker(ctx, &wg, &mutex, files, dirCh, endCh, errCh, &size, &count, &dirsProcessed, &dirsMade)
 	}
 
 	wg.Add(1)
@@ -117,16 +118,17 @@ func (a *sizer) Size(ctx context.Context, d Dir) (Result, error) {
 		defer wg.Done()
 		select {
 		case <-ctx.Done():
-			a.close(dirCh, endCh, errCh)
-			//closeChannels(dirCh, endCh, errCh) // todo:
+			closeChannels(dirCh, endCh, errCh)
 			return
+
 		case <-endCh:
-			a.close(dirCh, endCh, errCh)
+			closeChannels(dirCh, endCh, errCh)
 			return
 		}
 	}()
 	wg.Wait()
 
+	// files always nil...
 	for _, f := range files {
 
 		sz, err := f.Stat(ctx)
