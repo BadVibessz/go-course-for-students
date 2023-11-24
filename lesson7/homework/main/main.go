@@ -6,12 +6,16 @@ import (
 
 func main() {
 
+	type args struct {
+		v any
+	}
+
 	d := struct {
-		private int    `yaml:"private"`
-		Public  string `yaml:"private,dura"`
+		args args
 	}{
-		private: 1,
-		Public:  "0",
+		args{
+			v: new(any),
+		},
 	}
 
 	val := reflect.ValueOf(&d).Elem()
