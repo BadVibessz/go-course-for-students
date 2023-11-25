@@ -37,8 +37,8 @@ func (v ValidationErrors) Error() string {
 	return res
 }
 
-func (v ValidationErrors) Add(errors ...ValidationError) {
-	v = append(v, errors...)
+func (v *ValidationErrors) Add(errors ...ValidationError) {
+	*v = append(*v, errors...)
 }
 
 func getAllFields(val reflect.Value) ([]reflect.Value, []reflect.StructField) {
@@ -153,6 +153,12 @@ func handleInTag(val string, field reflect.Value, structField reflect.StructFiel
 
 	spltd := strings.Split(val, ",")
 
+	if len(spltd) == 1 && spltd[0] == "" {
+		return ValidationError{
+			Err: errors.New("in tag cannot contain empty constraint"),
+		}
+	}
+
 	isInt := true
 
 	constraints := make([]int, len(spltd))
@@ -160,7 +166,7 @@ func handleInTag(val string, field reflect.Value, structField reflect.StructFiel
 
 		out, err := strconv.Atoi(v)
 		if err != nil {
-			isInt = true
+			isInt = false
 		} else {
 			constraints[i] = out
 		}
@@ -181,7 +187,9 @@ func handleInTag(val string, field reflect.Value, structField reflect.StructFiel
 	} else {
 
 		if field.Type() != reflect.TypeOf("") {
-			return ErrInvalidTag
+			return ValidationError{
+				Err: ErrInvalidTag,
+			}
 		}
 
 		if !slices.Contains(spltd, field.String()) {
@@ -232,17 +240,16 @@ func Validate(s any) error {
 
 			if !v.IsExported() {
 				validErrors.Add(ValidationError{Err: ErrValidateForUnexportedFields})
+				continue
 			}
 
 			err := handleTag(tag, fields[i], v)
 			if err != nil {
 
 				if errors.Is(err, ValidationError{}) {
-					validErrors = append(validErrors, err.(ValidationError))
+					validErrors.Add(err.(ValidationError))
 				} else {
-					return ValidationError{
-						Err: err,
-					}
+					validErrors.Add(ValidationError{Err: err})
 				}
 			}
 		}

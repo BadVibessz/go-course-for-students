@@ -74,6 +74,7 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 			checkErr: func(err error) bool {
 				e := &ValidationErrors{}
+
 				return errors.As(err, e) && e.Error() == ErrValidateForUnexportedFields.Error()
 			},
 		},
