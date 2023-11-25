@@ -82,16 +82,20 @@ func handleLenTag(val string, field reflect.Value, structField reflect.StructFie
 		return ErrInvalidValidatorSyntax
 	}
 
-	// check if field has string type
-	if field.Type() != reflect.TypeOf("") {
+	switch field.Interface().(type) {
+
+	case string:
+		if len(field.String()) != constraint {
+			return ValidationError{
+				Err: errors.New("length of field " + structField.Name + " is not " + strconv.Itoa(constraint)),
+			}
+		}
+		break
+
+	default:
 		return ErrInvalidTag
 	}
 
-	if len(field.String()) != constraint {
-		return ValidationError{
-			Err: errors.New("length of field " + structField.Name + " is not " + strconv.Itoa(constraint)),
-		}
-	}
 	return nil
 }
 
@@ -102,20 +106,24 @@ func handleMinTag(val string, field reflect.Value, structField reflect.StructFie
 		return ErrInvalidValidatorSyntax
 	}
 
-	// check if field has type string or int
-	if field.Type() == reflect.TypeOf("") {
-		if len(field.String()) < constraint {
-			return ValidationError{
-				Err: errors.New("length of field " + structField.Name + " is less than " + strconv.Itoa(constraint)),
-			}
-		}
-	} else if field.Type() == reflect.TypeOf(constraint) {
+	switch field.Interface().(type) {
+	case int:
 		if field.Int() < int64(constraint) {
 			return ValidationError{
 				Err: errors.New("field " + structField.Name + " is less than " + strconv.Itoa(constraint)),
 			}
 		}
-	} else {
+		break
+
+	case string:
+		if len(field.String()) < constraint {
+			return ValidationError{
+				Err: errors.New("length of field " + structField.Name + " is less than " + strconv.Itoa(constraint)),
+			}
+		}
+		break
+
+	default:
 		return ErrInvalidTag
 	}
 
@@ -130,22 +138,26 @@ func handleMaxTag(val string, field reflect.Value, structField reflect.StructFie
 	}
 
 	// check if field has type string or int
-	if field.Type() == reflect.TypeOf("") {
-		if len(field.String()) > constraint {
-			return ValidationError{
-				Err: errors.New("length of field " + structField.Name + " is more than " + strconv.Itoa(constraint)),
-			}
-		}
-	} else if field.Type() == reflect.TypeOf(constraint) {
+	switch field.Interface().(type) {
+	case int:
 		if field.Int() > int64(constraint) {
 			return ValidationError{
 				Err: errors.New("field " + structField.Name + " is more than " + strconv.Itoa(constraint)),
 			}
 		}
-	} else {
+		break
+
+	case string:
+		if len(field.String()) > constraint {
+			return ValidationError{
+				Err: errors.New("length of field " + structField.Name + " is more than " + strconv.Itoa(constraint)),
+			}
+		}
+		break
+
+	default:
 		return ErrInvalidTag
 	}
-
 	return nil
 }
 
